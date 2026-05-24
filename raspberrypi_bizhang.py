@@ -339,50 +339,70 @@ def move():
         # 5. 避障流程1：右移→前进→回正（执行实际动作）
         elif current_step == 2:
             print("👉 执行避障流程2：右移避障 → 远离 → 左转回正")
+            print("→ 避障过程中，YOLO持续监控周围环境...")
             # 强制停止当前动作
             time.sleep(0.2)
             # 步骤1：右移避开障碍物
             for _ in range(8):  
                 AGC.runActionGroup('turn_right')
                 time.sleep(0.18)
-            # 步骤2：向前远离障碍物
-            for _ in range(10): 
+            # 步骤2：向前远离障碍物（注意：可能遇到新障碍物）
+            for i in range(10): 
                 AGC.runActionGroup('zhixing4')
+                # 避障过程中YOLO持续监控
+                if USE_YOLO:
+                    with yolo_lock:
+                        if object_position == 'center' and object_confidence > 0.5:
+                            print(f"⚠️ YOLO检测到正前方有新障碍物！增加观察时间...")
+                            time.sleep(0.5)  # 增加观察时间
                 time.sleep(0.18)
             # 步骤3：左转回正
             for _ in range(7):  
                 AGC.runActionGroup('turn_left')
                 time.sleep(0.18)
+            # 避障完成后短暂观察
+            print("✅ 右移避障动作完成，短暂观察周围...")
+            time.sleep(0.3)
             # 重置状态，回到巡线
             current_step = 1
             stop_patrol = False
             goforward = 0
             avoiding_obstacle = False  # 避障完成，重新启用障碍物检测
-            print("✅ 右移避障完成，回到巡线状态")
+            print("✅ 确认安全，回到巡线状态")
 
         # 6. 避障流程2：左移→前进→回正（执行实际动作）
         elif current_step == 3:
             print("👉 执行避障流程3：左移避障 → 远离 → 右转回正")
+            print("→ 避障过程中，YOLO持续监控周围环境...")
             # 强制停止当前动作
             time.sleep(0.2)
             # 步骤1：左移避开障碍物
             for _ in range(9):  
                 AGC.runActionGroup('turn_left')
                 time.sleep(0.18)
-            # 步骤2：向前远离障碍物
-            for _ in range(10): 
+            # 步骤2：向前远离障碍物（注意：可能遇到新障碍物）
+            for i in range(10): 
                 AGC.runActionGroup('go_forward_fast')
+                # 避障过程中YOLO持续监控
+                if USE_YOLO:
+                    with yolo_lock:
+                        if object_position == 'center' and object_confidence > 0.5:
+                            print(f"⚠️ YOLO检测到正前方有新障碍物！增加观察时间...")
+                            time.sleep(0.5)  # 增加观察时间
                 time.sleep(0.18)
             # 步骤3：右转回正
             for _ in range(8):  
                 AGC.runActionGroup('turn_right')
                 time.sleep(0.18)
+            # 避障完成后短暂观察
+            print("✅ 左移避障动作完成，短暂观察周围...")
+            time.sleep(0.3)
             # 重置状态，回到巡线
             current_step = 1
             stop_patrol = False
             goforward = 0
             avoiding_obstacle = False  # 避障完成，重新启用障碍物检测
-            print("✅ 左移避障完成，回到巡线状态")
+            print("✅ 确认安全，回到巡线状态")
 
         else:
             time.sleep(0.1)
