@@ -1,14 +1,13 @@
-# 树莓派避障机器人依赖
+# TonyPi 树莓派5优化版依赖
 
 # 基础依赖（必须）
-opencv-python>=4.5.0
 numpy>=1.19.0
+opencv-python>=4.5.0
 
-# YOLOv12依赖（如果使用YOLOv12）
-# pip install torch torchvision ultralytics
+# 性能监控依赖
+psutil>=5.8.0
 
-# 如果你使用YOLOv12-nano（推荐！），运行：
-# pip install torch torchvision ultralytics
-
-# 如果你使用YOLOv3-tiny（无需PyTorch），只需要：
-# pip install opencv-python numpy
+# YOLOv12依赖（可选，树莓派5推荐）
+# torch>=2.0.0
+# torchvision>=0.15.0
+# ultralytics>=8.0.0
