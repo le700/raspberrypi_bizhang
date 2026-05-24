@@ -82,19 +82,16 @@ MIN_CONTOUR_AREA = 100
 # YOLO相关变量
 detected_objects = []
 object_confidence = 0.0
-object_distance_estimate = 99999
+object_position = 'none'  # 'left', 'center', 'right', 'none'
 USE_YOLO = False  # 可配置是否启用YOLO
 YOLO_CONFIDENCE_THRESHOLD = 0.5
 YOLO_FRAME_SKIP = 3  # 跳帧检测以提升性能
 yolo_frame_count = 0
+IMG_WIDTH = 640  # 摄像头分辨率宽度
 
-# 数据融合变量
-fusion_distance = 99999
-fusion_confidence = 0.0
-
-# YOLO检测函数 (使用OpenCV DNN)
+# YOLO检测函数 - 只检测障碍物方位，不估算距离
 def yolo_detect(frame):
-    global detected_objects, object_confidence, object_distance_estimate, YOLO_NET, YOLO_OUTPUT_LAYERS
+    global detected_objects, object_confidence, object_position, YOLO_NET, YOLO_OUTPUT_LAYERS
     if not YOLO_AVAILABLE or not USE_YOLO or YOLO_NET is None:
         return []
     
@@ -111,7 +108,6 @@ def yolo_detect(frame):
         objects = []
         boxes = []
         confidences = []
-        class_ids = []
         
         for output in layer_outputs:
             for detection in output:
@@ -130,86 +126,45 @@ def yolo_detect(frame):
                     
                     boxes.append([x, y, w, h])
                     confidences.append(float(confidence))
-                    class_ids.append(class_id)
+                    objects.append({
+                        'center_x': center_x,
+                        'center_y': center_y,
+                        'confidence': confidence
+                    })
         
         # 非极大值抑制
         indices = cv2.dnn.NMSBoxes(boxes, confidences, YOLO_CONFIDENCE_THRESHOLD, 0.4)
         
+        final_objects = []
         for i in indices:
             i = i[0] if isinstance(i, (list, np.ndarray)) else i
-            box = boxes[i]
-            x, y, w, h = box
-            
-            # 估算距离
-            est_dist = estimate_distance(w, h)
-            
-            objects.append({
-                'x1': x,
-                'y1': y,
-                'x2': x + w,
-                'y2': y + h,
-                'class': class_ids[i],
-                'confidence': confidences[i],
-                'distance': est_dist,
-                'center_x': x + w / 2,
-                'center_y': y + h / 2
-            })
+            final_objects.append(objects[i])
         
-        # 更新全局变量
+        # 更新全局变量 - 只记录位置
         with yolo_lock:
-            detected_objects = objects.copy()
-            if objects:
-                best_obj = max(objects, key=lambda obj: obj['confidence'])
+            detected_objects = final_objects.copy()
+            if final_objects:
+                # 取最靠近中心且置信度最高的对象
+                best_obj = max(final_objects, key=lambda obj: obj['confidence'])
                 object_confidence = best_obj['confidence']
-                object_distance_estimate = best_obj['distance']
+                
+                # 判断方位：左(0-213)、中(213-426)、右(426-640)
+                if best_obj['center_x'] < IMG_WIDTH / 3:
+                    object_position = 'left'
+                elif best_obj['center_x'] > IMG_WIDTH * 2 / 3:
+                    object_position = 'right'
+                else:
+                    object_position = 'center'
             else:
                 object_confidence = 0.0
-                object_distance_estimate = 99999
+                object_position = 'none'
         
-        return objects
+        return final_objects
     except Exception as e:
         return []
 
-# 基于目标大小估算距离（简单实现）
-def estimate_distance(box_width, box_height, known_width=0.5, focal_length=500):
-    """
-    简单的距离估算函数
-    known_width: 目标实际宽度（米）
-    focal_length: 相机焦距（像素）
-    """
-    if box_width > 0:
-        distance = (known_width * focal_length) / box_width * 1000  # 转换为毫米
-        return min(max(distance, 100), 5000)
-    return 99999
+# 视觉线程（单线巡线逻辑 + YOLO检测）
 
-# 数据融合函数
-def fuse_sensor_data(ultrasonic_dist, yolo_dist, yolo_conf):
-    """
-    融合超声波和YOLO数据
-    """
-    global fusion_distance, fusion_confidence
-    
-    if yolo_conf > 0.6 and ultrasonic_dist < 5000:
-        # 两者都有效，加权融合
-        weight_ultrasonic = 0.6
-        weight_yolo = 0.4
-        fused_dist = ultrasonic_dist * weight_ultrasonic + yolo_dist * weight_yolo
-        fused_conf = min(1.0, (ultrasonic_dist / 3000 + yolo_conf * 0.5))
-    elif ultrasonic_dist < 5000:
-        # 只有超声波有效
-        fused_dist = ultrasonic_dist
-        fused_conf = 0.7
-    elif yolo_conf > 0.3:
-        # 只有YOLO有效
-        fused_dist = yolo_dist
-        fused_conf = yolo_conf * 0.5
-    else:
-        fused_dist = 99999
-        fused_conf = 0.0
-    
-    return fused_dist, fused_conf
-
-# 视觉线程（单线巡线逻辑 + YOLO检测
 def vision_loop():
     global img_centerx, screen_black, yolo_frame_count
     if not CV2_AVAILABLE:
@@ -276,7 +231,7 @@ def vision_loop():
 
 
 def move():
-    global current_step, obstacle_count, distance, goforward, fall_recovery_in_progress, stop_patrol, fusion_distance, fusion_confidence
+    global current_step, obstacle_count, distance, goforward, fall_recovery_in_progress, stop_patrol
 
     DIST_OBSTACLE_MM = 250
     LINE_OFFSET_THR = 80
@@ -291,21 +246,10 @@ def move():
             local_imgx = img_centerx
             local_screen_black = screen_black
         with yolo_lock:
-            local_yolo_dist = object_distance_estimate
+            local_yolo_position = object_position
             local_yolo_conf = object_confidence
         
-        # 数据融合
-        fused_dist, fused_conf = fuse_sensor_data(local_distance, local_yolo_dist, local_yolo_conf)
-        
-        # 更新融合距离
-        with distance_lock:
-            fusion_distance = fused_dist
-            fusion_confidence = fused_conf
-        
-        # 使用融合后的距离进行决策
-        effective_distance = fused_dist if fused_conf > 0.3 else local_distance
-        
-        if local_screen_black and effective_distance < ULTRASONIC_FALL_THR:
+        if local_screen_black and local_distance < ULTRASONIC_FALL_THR:
             if not fall_recovery_in_progress:
                 print("检测到跌倒，开始自动起立...")
                 fall_recovery_in_progress = True
@@ -322,24 +266,29 @@ def move():
             continue
 
         with obstacle_lock:
-            if effective_distance > 0 and effective_distance <= DIST_OBSTACLE_MM:
+            if local_distance > 0 and local_distance <= DIST_OBSTACLE_MM:
                 stop_patrol = True
                 obstacle_count += 1
-                print(f"🚨 触发避障！超声波={local_distance}mm, YOLO={local_yolo_dist:.0f}mm, 融合={effective_distance:.0f}mm，切换到避障流程")
-                # 可选：根据YOLO检测结果优化避障方向
-                if USE_YOLO and local_yolo_conf > 0.5:
-                    with yolo_lock:
-                        if detected_objects:
-                            # 根据目标位置选择避障方向
-                            obj = detected_objects[0]
-                            if obj['center_x'] < 320:  # 目标在左侧，从右侧绕
-                                current_step = 2
-                            else:  # 目标在右侧，从左侧绕
-                                current_step = 3
-                        else:
-                            current_step = 2 if obstacle_count % 2 == 1 else 3
+                print(f"🚨 触发避障！超声波={local_distance}mm，YOLO检测到障碍物在'{local_yolo_position}'方位")
+                
+                # 根据YOLO检测到的方位选择避障方向
+                if USE_YOLO and local_yolo_conf > 0.3 and local_yolo_position != 'none':
+                    # 障碍物在左边 → 从右边绕（step 2）
+                    # 障碍物在右边 → 从左边绕（step 3）
+                    # 障碍物在中间 → 交替选择
+                    if local_yolo_position == 'left':
+                        current_step = 2  # 从右边绕
+                        print("→ YOLO检测障碍物在左侧，选择从右侧绕行")
+                    elif local_yolo_position == 'right':
+                        current_step = 3  # 从左边绕
+                        print("→ YOLO检测障碍物在右侧，选择从左侧绕行")
+                    else:  # center
+                        current_step = 2 if obstacle_count % 2 == 1 else 3
+                        print(f"→ YOLO检测障碍物在中间，轮流选择避障方向")
                 else:
+                    # YOLO未启用或未检测到，使用轮流策略
                     current_step = 2 if obstacle_count % 2 == 1 else 3
+                    print(f"→ 使用轮流避障策略")
                 time.sleep(0.3)
             else:
                 stop_patrol = False
@@ -483,7 +432,10 @@ if __name__ == "__main__":
                 with distance_lock:
                     distance = int(round(np.mean(np.array(distance_list))))
                     if YOLO_AVAILABLE and USE_YOLO:
-                        print(f"当前测距: {distance} mm, YOLO: {object_distance_estimate:.0f}mm, 融合: {fusion_distance:.0f}mm")
+                        with yolo_lock:
+                            yolo_pos = object_position
+                            yolo_conf = object_confidence
+                        print(f"当前测距: {distance} mm, YOLO检测: {yolo_pos} (置信度: {yolo_conf:.2f})")
                     else:
                         print(f"当前测距: {distance} mm")
                     distance_list = []
