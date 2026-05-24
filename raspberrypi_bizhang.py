@@ -60,10 +60,12 @@ current_step = 1
 obstacle_count = 0  
 distance = 99999  # 单位：mm
 goforward = 0
-# 新增：避障触发锁（防止重复触发）
+# 避障触发锁（防止重复触发）
 obstacle_lock = threading.Lock()
-# 新增：强制停止巡线标志
+# 强制停止巡线标志
 stop_patrol = False  
+# 避障进行中标志（防止避障时误触发）
+avoiding_obstacle = False  
 
 # 跌倒检测相关变量
 fall_recovery_in_progress = False
@@ -231,7 +233,7 @@ def vision_loop():
 
 
 def move():
-    global current_step, obstacle_count, distance, goforward, fall_recovery_in_progress, stop_patrol
+    global current_step, obstacle_count, distance, goforward, fall_recovery_in_progress, stop_patrol, avoiding_obstacle
 
     DIST_OBSTACLE_MM = 250
     LINE_OFFSET_THR = 80
@@ -266,10 +268,13 @@ def move():
             continue
 
         with obstacle_lock:
-            if local_distance > 0 and local_distance <= DIST_OBSTACLE_MM:
+            # 只有不在避障过程中才检测新障碍物
+            if not avoiding_obstacle and local_distance > 0 and local_distance <= DIST_OBSTACLE_MM:
+                avoiding_obstacle = True
                 stop_patrol = True
                 obstacle_count += 1
                 print(f"🚨 触发避障！超声波={local_distance}mm，YOLO检测到障碍物在'{local_yolo_position}'方位")
+                print("→ 进入避障流程，临时禁用障碍物检测...")
                 
                 # 根据YOLO检测到的方位选择避障方向
                 if USE_YOLO and local_yolo_conf > 0.3 and local_yolo_position != 'none':
@@ -352,6 +357,7 @@ def move():
             current_step = 1
             stop_patrol = False
             goforward = 0
+            avoiding_obstacle = False  # 避障完成，重新启用障碍物检测
             print("✅ 右移避障完成，回到巡线状态")
 
         # 6. 避障流程2：左移→前进→回正（执行实际动作）
@@ -375,6 +381,7 @@ def move():
             current_step = 1
             stop_patrol = False
             goforward = 0
+            avoiding_obstacle = False  # 避障完成，重新启用障碍物检测
             print("✅ 左移避障完成，回到巡线状态")
 
         else:
