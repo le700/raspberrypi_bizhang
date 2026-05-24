@@ -1,0 +1,5 @@
+# 树莓派避障机器人依赖
+opencv-python>=4.5.0
+numpy>=1.19.0
+
+# 仅需要OpenCV，无需PyTorch！
